@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -15,129 +16,115 @@ var (
 	GuildID        = flag.String("guild", "", "Test guild ID. If not passed - bot registers commands globally")
 	BotToken       = flag.String("token", "", "Bot access token")
 	RemoveCommands = flag.Bool("rmcmd", true, "Remove all commands after shutdowning or not")
+	AppID          = flag.String("app", "", "Application ID")
+	TestChannel    = flag.String("results", "", "Channel where send survey results to")
 )
 
-var s *discordgo.Session
-
-func init() { flag.Parse() }
-
 func init() {
-	var err error
-	s, err = discordgo.New("Bot " + *BotToken)
-	if err != nil {
-		log.Fatalf("Invalid bot parameters: %v", err)
-	}
+	flag.Parse()
 }
 
+// its command initialization time!!!
 var (
 	commands = []*discordgo.ApplicationCommand{
 		{
-			Name: "verify",
-			// All commands and options must have a description
-			// Commands/options without description will fail the registration
-			// of the command.
-			Description: "Verify your account!",
+			Name:        "verify",
+			Description: "Verify your account to get access to this server!",
 		},
-		{
-			Name:        "setrole",
-			Description: "Set the role given to users on successful verification.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionRole,
-					Name:        "role-option",
-					Description: "Role option",
-					Required:    false,
-				},
-			},
-		},
+		//		{
+		//			Name: "setrole",
+		//			Description: "Change the role people get when verifying with QuestionProtection.",
+		//		},
 	}
-	commandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
-		"basic-command": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
+	//ok, cool, but now we need to handle them
+	commandsHandlers = map[string]func(disgo *discordgo.Session, i *discordgo.InteractionCreate){
+		"verify": func(disgo *discordgo.Session, i *discordgo.InteractionCreate) {
+			disgo.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseModal,
 				Data: &discordgo.InteractionResponseData{
-					Content: "This will open a modal soon.",
-				},
-			})
-		},
-		"options": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			margs := []interface{}{
-				// Here we need to convert raw interface{} value to wanted type.
-				// Also, as you can see, here is used utility functions to convert the value
-				// to particular type. Yeah, you can use just switch type,
-				// but this is much simpler
-				i.ApplicationCommandData().Options[0].RoleValue(nil, "").ID,
-			}
-			msgformat :=
-				` Now you just learned how to use command options. Take a look to the value of which you've just entered:
-				> role_option: %s
-			`
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				// Ignore type for now, we'll discuss them in "responses" part
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: fmt.Sprintf(
-						msgformat,
-						margs...,
-					),
+					CustomID: "verify_user_" + i.Interaction.Member.User.ID,
+					Title:    "Verify your account",
+					Components: []discordgo.MessageComponent{
+						discordgo.TextInput{
+							CustomID:    "verifyquestion",
+							Label:       "Example question?",
+							Style:       discordgo.TextInputShort,
+							Placeholder: "Answer to the question goes here.",
+							Required:    true,
+							MaxLength:   100,
+							MinLength:   1,
+						},
+					},
 				},
 			})
 		},
 	}
+	// ok fuck setrole we arent doing it rn jeezus thats a lot
 )
 
-func init() {
-	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
-			h(s, i)
-		}
-	})
-}
-
 func main() {
-	s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
-		log.Printf("Logged in as: %v#%v", s.State.User.Username, s.State.User.Discriminator)
-	})
-	err := s.Open()
-	if err != nil {
-		log.Fatalf("Cannot open the session: %v", err)
+	disgo, err := discordgo.New("Bot " + *BotToken)
+
+	if err != nil { // if we have an error:
+		log.Fatalln("error: creating discord session failed.", err)
 	}
-
-	log.Println("Adding commands...")
-	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
-	for i, v := range commands {
-		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, *GuildID, v)
-		if err != nil {
-			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
-		}
-		registeredCommands[i] = cmd
-	}
-
-	defer s.Close()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt)
-	log.Println("Press Ctrl+C to exit")
-	<-stop
-
-	if *RemoveCommands {
-		log.Println("Removing commands...")
-		// // We need to fetch the commands, since deleting requires the command ID.
-		// // We are doing this from the returned commands on line 375, because using
-		// // this will delete all the commands, which might not be desirable, so we
-		// // are deleting only the commands that we added.
-		// registeredCommands, err := s.ApplicationCommands(s.State.User.ID, *GuildID)
-		// if err != nil {
-		// 	log.Fatalf("Could not fetch registered commands: %v", err)
-		// }
-
-		for _, v := range registeredCommands {
-			err := s.ApplicationCommandDelete(s.State.User.ID, *GuildID, v.ID)
+	disgo.AddHandler(func(disgo *discordgo.Session, i *discordgo.InteractionCreate) {
+		switch i.Type { //what kind of interaction?
+		case discordgo.InteractionApplicationCommand:
+			if h, ok := commandsHandlers[i.ApplicationCommandData().Name]; ok {
+				h(disgo, i)
+			} // command!!!
+		case discordgo.InteractionModalSubmit:
+			err := disgo.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Thank you! We are now verifying your account.",
+					Flags:   1 << 6,
+				},
+			})
 			if err != nil {
-				log.Panicf("Cannot delete '%v' command: %v", v.Name, err)
+				panic(err)
+			}
+			data := i.ModalSubmitData()
+
+			if !strings.HasPrefix(data.CustomID, "modals_survey") {
+				return
+			}
+
+			userid := strings.Split(data.CustomID, "_")[2]
+			_, err = disgo.ChannelMessageSend(*TestChannel, fmt.Sprintf(
+				"Testing - <@%s>\n\n**Test:**:\n%s\n\n",
+				userid,
+				data.Components[0].(*discordgo.ActionsRow).Components[0].(*discordgo.TextInput).Value,
+			))
+			if err != nil {
+				panic(err)
+			}
+			cmdIDs := make(map[string]string, len(commands))
+
+			for _, cmd := range commands {
+				rcmd, err := disgo.ApplicationCommandCreate(*AppID, *GuildID, cmd)
+				if err != nil {
+					log.Fatalf("Cannot create slash command %q: %v", cmd.Name, err)
+				}
+
+				cmdIDs[rcmd.ID] = rcmd.Name
+
+				err = disgo.Open()
+				if err != nil {
+					log.Fatalf("Cannot open the session: %v", err)
+				}
+				defer disgo.Close()
+
+				stop := make(chan os.Signal, 1)
+				signal.Notify(stop, os.Interrupt)
+				<-stop
+				log.Println("Gracefully shutting down.")
+
+				if !*RemoveCommands {
+					return
+				}
 			}
 		}
-	}
-
-	log.Println("Gracefully shutdowning")
+	})
 }
